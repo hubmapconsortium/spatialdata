@@ -498,8 +498,10 @@ def _resolve_zarr_store(
         # if the input is a local path, use LocalStore
         return LocalStore(path.path)
 
-    if isinstance(path.store, ZipStore):
-        path = zarr.open_group(store=store, mode='r')
+    if isinstance(path, UPath) and str(path).endswith(".zip"):
+        print(path) #TODO: get rid of print
+        if isinstance(path, (PosixUPath, WindowsUPath)):
+            return ZipStore(path.path, mode='r')
 
     if isinstance(path, zarr.Group):
         # if the input is a zarr.Group, wrap it with a store

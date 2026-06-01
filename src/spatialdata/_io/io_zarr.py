@@ -155,6 +155,10 @@ def read_zarr(
     """
     from spatialdata._io._utils import _resolve_zarr_store
 
+    if str(store).endswith(".zip"):
+        store = zarr.storage.ZipStore(store)
+        print(store) #TODO: get rid of print
+
     resolved_store = _resolve_zarr_store(store)
     root_group = zarr.open_group(resolved_store, mode="r")
     # the following is the SpatialDataContainerFormat version
