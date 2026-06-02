@@ -54,15 +54,12 @@ def _read_zarr_group_spatialdata_element(
                     # skip hidden files like .zgroup or .zmetadata
                     continue
                 elem_group = group[subgroup_name]
-                # for unzipped zarr path
-                if isinstance(root_store_path, str):
-                    elem_group_path = os.path.join(root_store_path, elem_group.path)
-                # for zipped zarr store
-                elif isinstance(root_store_path, zarr.storage.ZipStore):
+                # fix for zipstores
+                if isinstance(root_store_path, zarr.storage.ZipStore):
                     elem_group_path = elem_group
+                # original functionality
                 else:
-                    elem_group_path = root_store_path
-
+                    elem_group_path = os.path.join(root_store_path, elem_group.path)
                 with handle_read_errors(
                     on_bad_files,
                     location=f"{group.path}/{subgroup_name}",
