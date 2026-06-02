@@ -9,6 +9,7 @@ from geopandas import GeoDataFrame, read_parquet
 from natsort import natsorted
 from ome_zarr.format import Format
 from shapely import from_ragged_array, to_ragged_array
+from zarr.core.group import Group as ZarrGroup
 
 from spatialdata._io._utils import (
     _get_transformations_from_ngff_dict,
@@ -31,10 +32,14 @@ from spatialdata.transformations._utils import (
 
 
 def _read_shapes(
-    store: str | Path,
+    store: str | Path | ZarrGroup,
 ) -> GeoDataFrame:
     """Read shapes from a zarr store."""
-    f = zarr.open(Path(store), mode="r")  # Path avoids zarr v3 URL-parsing special chars (e.g. #) in names
+    # fix for zipstore
+    if isinstance(store, ZarrGroup):
+        f = store
+    else:
+        f = zarr.open(Path(store), mode="r")  # Path avoids zarr v3 URL-parsing special chars (e.g. #) in names
     version = _parse_version(f, expect_attrs_key=True)
     assert version is not None
     shape_format = ShapesFormats[version]
