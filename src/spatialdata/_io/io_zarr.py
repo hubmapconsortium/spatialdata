@@ -240,7 +240,11 @@ def read_zarr(
         tables=tables,
         attrs=attrs,
     )
-    sdata.path = resolved_store.root
+    # fix for zipstores
+    if isinstance(resolved_store.root, str):
+        sdata.path = Path(resolved_store.root)
+    else:
+        sdata.path = resolved_store.root
     return sdata
 
 

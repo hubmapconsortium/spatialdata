@@ -59,9 +59,28 @@ def _read_shapes(
             geometry = from_ragged_array(typ, coords, offsets)
             geo_df = GeoDataFrame({"geometry": geometry}, index=index)
     elif isinstance(shape_format, ShapesFormatV02 | ShapesFormatV03):
-        store_root = f.store_path.store.root
-        path = Path(store_root) / f.path / "shapes.parquet"
-        geo_df = read_parquet(path)
+        # fix for zipstores
+        if isinstance(f.store, zarr.storage.ZipStore):
+            import io
+
+            target_key = f"{f.path}/shapes.parquet" if f.path else "shapes.parquet"
+            target_key = target_key.strip('/')
+            if hasattr(f.store, "_zf") and f.store._zf is not None:
+                parquet_bytes = f.store._zf.read(target_key)
+            else:
+                from zarr.core.buffer import default_buffer_prototype
+                from zarr.core.sync import sync
+
+                buffer_obj = sync(f.store.get(target_key, prototype=default_buffer_prototype()))
+                parquet_bytes = buffer_obj.to_bytes() if buffer_obj else None
+            if parquet_bytes is None:
+                raise FileNotFoundError(f"Could not extract shapes.parquet inside zipped group path: {target_key}")
+            geo_df = read_parquet(io.BytesIO(parquet_bytes))
+        # original method
+        else:
+            store_root = f.store_path.store.root
+            path = Path(store_root) / f.path / "shapes.parquet"
+            geo_df = read_parquet(path)
     else:
         raise ValueError(
             f"Unsupported shapes format {shape_format} from version {version}. Please update the spatialdata library."

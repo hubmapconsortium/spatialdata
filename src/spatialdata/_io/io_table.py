@@ -24,13 +24,7 @@ def _read_table(store: str | Path | ZarrGroup) -> AnnData:
     # fix for zipstore
     if isinstance(store, ZarrGroup):
         f = store
-        if hasattr(f.store, "root") or hasattr(f.store, "path"):
-            store_base = getattr(f.store, "root", getattr(f.store, "path", ""))
-            anndata_target = f"{store_base}/{f.path}" if f.path else store_base
-        else:
-            anndata_target = f
-        table = read_anndata_zarr(anndata_target)
-    # original method
+        table = read_anndata_zarr(f)
     else:
         table = read_anndata_zarr(str(store))
         f = zarr.open(Path(store), mode="r")  # Path avoids zarr v3 URL-parsing special chars (e.g. #) in names
