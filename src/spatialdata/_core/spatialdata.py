@@ -1179,11 +1179,12 @@ class SpatialData:
 
         # fix to save zipstores
         if file_path.name.endswith(".zip"):
-            original_file_name = file_path
+            original_file_path = file_path
             zip_file_path = file_path.name.removesuffix(".zip")
             file_path = Path(f"temp_{file_path.name.removesuffix(".zip")}")
         else:
             zip_file_path = None
+            original_file_path = None
 
         self._validate_can_safely_write_to_path(file_path, overwrite=overwrite)
         store = _resolve_zarr_store(file_path)
@@ -1206,20 +1207,19 @@ class SpatialData:
                 raster_compressor=raster_compressor,
             )
 
-        # now zip if the original filepath ended with .zip
-        if zip_file_path:
-            shutil.make_archive(zip_file_path, 'zip', file_path)
-            shutil.rmtree(file_path)
-            # make sure original store is still accessible after writing zipped store
-            file_path = Path(zip_file_path)
-
         if self.path != file_path and update_sdata_path:
             self.path = file_path
 
         if consolidate_metadata:
             self.write_consolidated_metadata()
 
-
+        # now zip if the original filepath ended with .zip
+        if zip_file_path:
+            shutil.make_archive(zip_file_path, 'zip', file_path)
+            shutil.rmtree(file_path)
+            # make sure original store is still accessible after writing zipped store
+            if original_file_path and update_sdata_path:
+                self.path = original_file_path
 
     def _write_element(
         self,
