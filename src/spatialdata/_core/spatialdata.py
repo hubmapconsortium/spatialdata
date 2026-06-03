@@ -7,6 +7,7 @@ import warnings
 from collections.abc import Generator, Mapping
 from itertools import chain
 from pathlib import Path
+import shutil
 from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
@@ -1175,10 +1176,16 @@ class SpatialData:
 
         if isinstance(file_path, str):
             file_path = Path(file_path)
+
+        # fix to save zipstores
+        if file_path.name.endswith(".zip"):
+            zip_file_path = file_path.name.removesuffix(".zip")
+            file_path = Path(f"temp_{file_path.name.removesuffix(".zip")}")
+
         self._validate_can_safely_write_to_path(file_path, overwrite=overwrite)
+        store = _resolve_zarr_store(file_path)
         self._validate_all_elements()
 
-        store = _resolve_zarr_store(file_path)
         zarr_format = parsed["SpatialData"].zarr_format
         zarr_group = zarr.create_group(store=store, overwrite=overwrite, zarr_format=zarr_format)
         self.write_attrs(zarr_group=zarr_group, sdata_format=parsed["SpatialData"])
@@ -1201,6 +1208,12 @@ class SpatialData:
 
         if consolidate_metadata:
             self.write_consolidated_metadata()
+
+        # now zip if the original filepath ended with .zip
+        if zip_file_path:
+            shutil.make_archive(zip_file_path, 'zip', file_path)
+            shutil.rmtree(file_path)
+
 
     def _write_element(
         self,
