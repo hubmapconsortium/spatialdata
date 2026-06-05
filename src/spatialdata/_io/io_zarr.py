@@ -261,7 +261,6 @@ def read_zarr(
         # they retain ownership.
         if not isinstance(store, (zarr.Group, zarr.abc.store.Store)):
             resolved_store.close()
-
     sdata = SpatialData(
         images=images,
         labels=labels,

@@ -6,7 +6,8 @@ from typing import Any, TypeAlias
 
 import zarr
 from upath import UPath
-from zarr.storage import FsspecStore, LocalStore
+from zarr.core.group import Group
+from zarr.storage import FsspecStore, LocalStore, ZipStore
 
 PathLike: TypeAlias = Path | UPath
 
@@ -66,6 +67,8 @@ def store_from_group(group: zarr.Group, *, read_only: bool = True) -> Any:
             path=join_fsspec_store_path(parent.path, group.path),
             read_only=read_only,
         )
+    if isinstance(parent, zarr.storage.ZipStore):
+        return zarr.open_group(store=parent, path=group.path, mode="r")
     return parent
 
 
@@ -106,6 +109,29 @@ def parquet_fs_and_path(group: zarr.Group, *child_parts: str) -> tuple[Any, str]
             fs = inner
         sub = f"{group.path}/{child}" if child else group.path
         return fs, join_fsspec_store_path(store.path, sub)
+
+    if isinstance(store, ZipStore):
+        import fsspec
+
+        zip_handle = store._zf
+        target_key = None
+
+        for zinfo in zip_handle.filelist:
+            if zinfo.filename.endswith("shapes.parquet"):
+                target_key = zinfo.filename
+                break
+
+        if not target_key:
+            raise FileNotFoundError("Could not find any 'shapes.parquet' item inside the zip archive.")
+
+        parquet_bytes = zip_handle.read(target_key)
+        mem_fs = fsspec.filesystem("memory")
+        virtual_path = f"memory:///{target_key}"
+
+        with mem_fs.open(virtual_path, "wb") as f_out:
+            f_out.write(parquet_bytes)
+
+        return mem_fs, virtual_path
 
     raise ValueError(f"Cannot derive a filesystem for store of type {type(store).__name__}")
 
@@ -149,6 +175,8 @@ def open_zarr_for_read(store: Any, *, as_group: bool = True) -> Any:
         ``zarr.open`` which returns either a ``Group`` or an ``Array`` based on
         the metadata at the store root.
     """
+    if isinstance(store, Group):
+        return store
     fn = zarr.open_group if as_group else zarr.open
     try:
         return fn(store, mode="r", zarr_format=3, use_consolidated=True)

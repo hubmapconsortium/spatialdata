@@ -59,7 +59,8 @@ def _read_shapes(group: zarr.Group) -> GeoDataFrame:
             f"Unsupported shapes format {shape_format} from version {version}. Please update the spatialdata library."
         )
 
-    transformations = _get_transformations_from_ngff_dict(group.attrs.asdict()["coordinateTransformations"])
+    transformations_dict = group.metadata.attributes
+    transformations = _get_transformations_from_ngff_dict(transformations_dict["coordinateTransformations"])
     _set_transformations(geo_df, transformations)
     return geo_df
 

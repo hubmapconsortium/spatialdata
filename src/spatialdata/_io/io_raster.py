@@ -4,11 +4,9 @@ from collections.abc import Sequence
 from typing import Any, Literal, TypeGuard, cast
 
 import dask.array as da
-import numpy as np
 import zarr
+from ome_zarr import OMEZarrImage, OMEZarrMultiscale
 from ome_zarr.format import Format
-from ome_zarr.io import ZarrLocation
-from ome_zarr.reader import Multiscales, Node, Reader
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import _get_valid_axes
 from ome_zarr.writer import write_image as write_image_ngff
@@ -166,20 +164,19 @@ def _read_multiscale(
     # ome_zarr.io.ZarrLocation needs a store rooted at this group's location, not at the
     # SpatialData container root, so we re-root the parent store at ``group.path``.
     resolved_store = store_from_group(group, read_only=True)
-
-    nodes: list[Node] = []
-    image_loc = ZarrLocation(resolved_store, fmt=reader_format)
-    if exists := image_loc.exists():
-        image_reader = Reader(image_loc)()
-        image_nodes = list(image_reader)
-        nodes = _get_multiscale_nodes(image_nodes, nodes)
+    if isinstance(resolved_store, zarr.storage.ZipStore):
+        resolved_store = zarr.open_group(resolved_store, path="", mode="r")
+    image_loc = OMEZarrMultiscale.from_ome_zarr(resolved_store)
+    if isinstance(image_loc, OMEZarrMultiscale):
+        img_metadata = image_loc.metadata
+        nodes = img_metadata.datasets
     else:
         raise OSError(
             f"Image location {image_loc} does not seem to exist. If it does, potentially the zarr.json (or .zattrs) "
             f"file inside is corrupted or not present or the image files themselves are corrupted."
         )
     if len(nodes) != 1:
-        if not exists:
+        if not isinstance(image_loc, OMEZarrMultiscale):
             raise ValueError(
                 f"len(nodes) = {len(nodes)}, expected 1 and image location {image_loc} "
                 "does not exist. Unable to read the NGFF file. Please report this bug "
@@ -190,74 +187,61 @@ def _read_multiscale(
             f"{image_loc.basename()} is potentially corrupted. Please report this bug and attach a minimal data "
             f"example."
         )
-
-    node = nodes[0]
-    loaded_node = node.load(Multiscales)
-    datasets, multiscales = (
-        loaded_node.datasets,
-        loaded_node.zarr.root_attrs["multiscales"],
-    )
-    # This works for all versions as in zarr v3 the level of the 'ome' key is taken as root_attrs.
-    omero_metadata = loaded_node.zarr.root_attrs.get("omero")
-    # TODO: check if below is still valid
-    legacy_channels_metadata = node.load(Multiscales).zarr.root_attrs.get("channels_metadata", None)  # legacy v0.1
-    assert len(multiscales) == 1
+    if isinstance(image_loc, OMEZarrMultiscale):
+        loaded_node = image_loc
+    if isinstance(loaded_node, (OMEZarrImage, OMEZarrMultiscale)):
+        datasets = loaded_node.metadata.datasets
+        if hasattr(loaded_node.metadata, "spatialdata_transforms"):
+            multiscales = dict(loaded_node.metadata)
+    # # This works for all versions as in zarr v3 the level of the 'ome' key is taken as root_attrs.
+    omero_metadata = multiscales.get("omero")
+    # # TODO: check if below is still valid
+    # legacy v0.1
+    # legacy_channels_metadata = loaded_node.metadata.load(Multiscales).zarr.get("channels_metadata", None)
+    # assert len(multiscales) == 1
     # checking for multiscales[0]["coordinateTransformations"] would make fail
     # something that doesn't have coordinateTransformations in top level
     # which is true for the current version of the spec
     # and for instance in the xenium example
-    encoded_ngff_transformations = multiscales[0]["coordinateTransformations"]
-    transformations = _get_transformations_from_ngff_dict(encoded_ngff_transformations)
+    # Fix axes
+    if "axes" in multiscales:
+        cleaned_axes = []
+        for ax in multiscales["axes"]:
+            if hasattr(ax, "name"):
+                cleaned_axes.append(str(ax.name))
+            else:
+                cleaned_axes.append(str(ax))
+        multiscales["axes"] = cleaned_axes
+    if "spatialdata_transforms" in multiscales and multiscales["spatialdata_transforms"]:
+        target_transforms_list = multiscales["spatialdata_transforms"]
+    else:
+        raw_transforms = multiscales["coordinateTransformations"]
+        target_transforms_list = [t.model_dump() if hasattr(t, "model_dump") else t for t in raw_transforms]
+
+    # 2. Feed the correct, populated layout down to spatialdata's parser
+    encoded_ngff_transformations = _get_transformations_from_ngff_dict(target_transforms_list)
     # if image, read channels metadata
     channels: list[Any] | None = None
-    if raster_type == "image":
-        if legacy_channels_metadata is not None:
-            channels = [d["label"] for d in legacy_channels_metadata["channels"]]
-        if omero_metadata is not None:
-            channels = [d["label"] for d in omero_metadata["channels"]]
-    axes = [i["name"] for i in node.metadata["axes"]]
+    if raster_type == "image" and omero_metadata is not None:
+        # if legacy_channels_metadata is not None:
+        #     channels = [d["label"] for d in legacy_channels_metadata["channels"]]
+        channels = [d["label"] for d in omero_metadata["channels"]]
+    axes = multiscales["axes"]
     if len(datasets) > 1:
-        arrays = [node.load(Multiscales).array(resolution=d) for d in datasets]
+        arrays = [image_loc.image.data for image in image_loc.images]
         msi = dask_arrays_to_datatree(arrays, dims=axes, channels=channels)
-        _set_transformations(msi, transformations)
+        _set_transformations(msi, encoded_ngff_transformations)
         return compute_coordinates(msi)
 
-    data = node.load(Multiscales).array(resolution=datasets[0])
+    data = image_loc.images[0].data
     si = DataArray(
         data,
         name="image",
         dims=axes,
         coords={"c": channels} if channels is not None else {},
     )
-    _set_transformations(si, transformations)
+    _set_transformations(si, encoded_ngff_transformations)
     return compute_coordinates(si)
-
-
-def _get_multiscale_nodes(image_nodes: list[Node], nodes: list[Node]) -> list[Node]:
-    """Get nodes with Multiscales spec from a list of nodes.
-
-    The nodes with the Multiscales spec are the nodes used for reading in image and label data. We only have to check
-    the multiscales now, while before we also had to check the label spec. In the new ome-zarr-py though labels can have
-    the Label spec, these do not contain the multiscales anymore used to read the data. They can contain label specific
-    metadata though.
-
-    Parameters
-    ----------
-    image_nodes
-        List of nodes returned from the ome-zarr-py Reader.
-    nodes
-        List to append the nodes with the multiscales spec to.
-
-    Returns
-    -------
-    List of nodes with the multiscales spec.
-    """
-    if len(image_nodes):
-        for node in image_nodes:
-            # Labels are now also Multiscales in newer version of ome-zarr-py
-            if np.any([isinstance(spec, Multiscales) for spec in node.specs]):
-                nodes.append(node)
-    return nodes
 
 
 def _write_raster(
