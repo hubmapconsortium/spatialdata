@@ -24,7 +24,6 @@ from spatialdata._io.format import (
     RasterFormatType,
     get_ome_zarr_format,
 )
-from spatialdata._store import store_from_group
 from spatialdata._utils import get_pyramid_levels
 from spatialdata.models._utils import get_channel_names
 from spatialdata.models.models import ATTRS_KEY
@@ -161,12 +160,7 @@ def _read_multiscale(
     group: zarr.Group, raster_type: Literal["image", "labels"], reader_format: Format
 ) -> DataArray | DataTree:
     assert raster_type in ["image", "labels"]
-    # ome_zarr.io.ZarrLocation needs a store rooted at this group's location, not at the
-    # SpatialData container root, so we re-root the parent store at ``group.path``.
-    resolved_store = store_from_group(group, read_only=True)
-    if isinstance(resolved_store, zarr.storage.ZipStore):
-        resolved_store = zarr.open_group(resolved_store, path="", mode="r")
-    image_loc = OMEZarrMultiscale.from_ome_zarr(resolved_store)
+    image_loc = OMEZarrMultiscale.from_ome_zarr(group)
     if isinstance(image_loc, OMEZarrMultiscale):
         img_metadata = image_loc.metadata
         nodes = img_metadata.datasets
