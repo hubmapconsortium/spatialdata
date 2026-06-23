@@ -160,6 +160,27 @@ def _read_multiscale(
     group: zarr.Group, raster_type: Literal["image", "labels"], reader_format: Format
 ) -> DataArray | DataTree:
     assert raster_type in ["image", "labels"]
+    # Handle transformations for ome-zarr validation
+    ome_attrs = dict(group.attrs.get("ome", {}))
+    metadata_json = ome_attrs.get("multiscales", [None])[0]
+
+    if "coordinateTransformations" in metadata_json:
+        metadata_json["spatialdata_transforms"] = metadata_json["coordinateTransformations"]
+        scale_transform = next(
+            (t for t in metadata_json["coordinateTransformations"] if t.get("type") == "scale"),
+            None,
+        )
+        if scale_transform:
+            compliant_scale = {
+                "type": "scale",
+                "scale": scale_transform["scale"],
+            }
+            metadata_json["coordinateTransformations"] = [compliant_scale]
+
+    ome_attrs["multiscales"] = [metadata_json]
+    # Update the metadata of the group
+    group.attrs.asdict()["ome"] = ome_attrs
+    # ome-zarr validation and object creation
     image_loc = OMEZarrMultiscale.from_ome_zarr(group)
     if isinstance(image_loc, OMEZarrMultiscale):
         img_metadata = image_loc.metadata
